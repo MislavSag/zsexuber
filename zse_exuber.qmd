@@ -1,0 +1,124 @@
+---
+title: "Exuber ZSE"
+format: html
+editor: visual
+---
+
+## 
+
+## Running Code
+
+sfs
+
+```{r}
+#| echo: false
+library(AzureStor)
+library(data.table)
+library(highfrequency)
+library(portfolioBacktest)
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
+
+```{r}
+# import data
+vrijednosnice <- fread("https://contentiobatch.blob.core.windows.net/zse/vrijednosnice.csv")
+tick_data_raw <- fread("https://contentiobatch.blob.core.windows.net/zse/transakcije.csv")
+corporate_actions <- fread("https://snpmarketdata.blob.core.windows.net/zse/corporate_actions_20221006093019.csv")
+corporate_actions[vrsta_ka == "PODJELA DIONICA"]
+unique(corporate_actions$vrsta_ka)
+
+
+# change tick_data_raw object to be suitable for highfrequency package.
+# "In the following, we assume the columns to be (re)named as in our sample datasets shown above."
+# The classical approach for cleaning trade and quote data is outlined in Barndorff-Nielsenet al. (2009)
+tick_data_raw <- as.data.table(tick_data_raw)
+setnames(tick_data_raw, 
+         c("VrijednosnicaID", "VrijemeTransakcije", "Kolicina", "Cijena"), 
+         c("SYMBOL", "DT", "SIZE", "PRICE"))
+tick_data_raw[, COND := "FTI"] # https://www.nyse.com/publicdocs/nyse/data/Daily_TAQ_Client_Spec_v3.3b.pdf
+tick_data_raw[, EX := "ZSE"]
+tick_data_raw[, CORR := 0]
+
+# summary
+head(tick_data_raw)
+dim(tick_data_raw)
+```
+
+test
+
+```{r}
+# filter after 2000
+tick_precleaned <- tick_data_raw[DT >= as.POSIXct("2000-01-01")]
+
+# change column types and remove unnecessary columns
+tick_precleaned[, `:=`(ISIN = NULL, Broj = NULL, Datum = NULL)]
+tick_precleaned[, SIZE := as.integer(SIZE)]
+tick_precleaned[, PRICE:= as.numeric(gsub(",", ".", PRICE))]
+
+# pre-clean raw tick data
+tick_data <- noZeroPrices(tick_precleaned)
+
+# get exchange gours
+# PASS
+
+tick_data <- mergeTradesSameTimestamp(tick_data)
+
+# sort
+setorder(tick_data, SYMBOL, DT)
+```
+
+test
+
+```{r}
+# make daily bars
+tick_data[, date := as.Date(DT)]
+daily_data <- tick_data[, .(
+  open = head(PRICE, 1),
+  high = max(PRICE, na.rm = TRUE),
+  low = min(PRICE, na.rm = TRUE),
+  close = tail(PRICE, 1),
+  volume = sum(SIZE, na.rm = TRUE)
+), by = .(SYMBOL, date)]
+
+# check
+sample_ <- daily_data[SYMBOL == 12]
+plot(as.xts.data.table(sample_[, .(date, close)]))
+```
+
+test
+
+```{r}
+data("dataset10")
+length(dataset10)
+length(dataset10[[1]])
+
+my_portfolio <- function(dataset, ...) {
+  prices <- dataset$adjusted
+  N <- ncol(prices)
+  return(rep(1/N, N))
+} # -> werights
+bt <- portfolioBacktest(my_portfolio, dataset10)
+backtestSummary(bt)$performance
+
+
+# portfolios
+portfolios <- list()
+portfolios[[1]] <- list(close_price, volume, index)
+
+quintile_prtfolio_fun <- function(dataset, w_current) {
+  X <- diff(log(dataset$adjusted))[-1]  # compute log returns
+  N <- ncol(X)
+  # design quintile portfolio
+  ranking <- sort(colMeans(X), decreasing = TRUE, index.return = TRUE)$ix
+  w <- rep(0, N)
+  w[ranking[1:round(N/5)]] <- 1/round(N/5)
+  return(w)
+}
+```
+
+LITERATURA
+
+1.  https://hrcak.srce.hr/clanak/322294
+2.  https://zir.nsk.hr/islandora/object/veleri%3A1636
+3.  
